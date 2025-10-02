@@ -129,6 +129,9 @@
         // Estrutura de Dados dos Blocos (para controle de lógica e remoção)
         const blocks = {}; // Key: "x_y_z", Value: { mesh, body }
 
+        // --- Materiais de Física (para controle de atrito) ---
+        let groundMaterial, playerMaterial;
+
         // Material dos Blocos
         const blockMaterials = {
             grass: new THREE.MeshLambertMaterial({ color: 0x6aa84f }), // Verde (Topo)
@@ -163,7 +166,8 @@
             // Otimização: Desativar antialias para ganho de performance
             renderer = new THREE.WebGLRenderer({ antialias: false });
             renderer.setSize(window.innerWidth, window.innerHeight);
-            renderer.shadowMap.enabled = true;
+            // Otimização: Desativar sombras para um grande ganho de performance
+            renderer.shadowMap.enabled = false;
             document.body.appendChild(renderer.domElement);
 
             // --- Cannon.js Setup ---
@@ -173,13 +177,31 @@
             world.broadphase = new CANNON.SAPBroadphase(world);
             world.solver.iterations = 10;
 
+            // --- Configuração dos Materiais de Física ---
+            // Criar materiais para o jogador e o chão
+            playerMaterial = new CANNON.Material("playerMaterial");
+            groundMaterial = new CANNON.Material("groundMaterial");
+
+            // Definir o comportamento do contato entre os dois materiais
+            const playerGroundContactMaterial = new CANNON.ContactMaterial(
+                groundMaterial,
+                playerMaterial,
+                {
+                    friction: 0,      // Sem atrito
+                    restitution: 0.3  // Um pouco de "pulo" ao colidir
+                }
+            );
+            // Adicionar a definição de contato ao mundo
+            world.addContactMaterial(playerGroundContactMaterial);
+
             // --- Iluminação ---
             const ambientLight = new THREE.AmbientLight(0xcccccc, 0.6);
             scene.add(ambientLight);
 
             const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
             directionalLight.position.set(10, 20, 10);
-            directionalLight.castShadow = true;
+            // Otimização: Desativar a projeção de sombras
+            directionalLight.castShadow = false;
             // Otimização: Reduzir a resolução do mapa de sombras
             directionalLight.shadow.mapSize.width = 1024;
             directionalLight.shadow.mapSize.height = 1024;
@@ -221,8 +243,9 @@
             const material = blockMaterials[type] || blockMaterials.dirt;
             const mesh = new THREE.Mesh(geometry, material);
             mesh.position.set(x, y, z);
-            mesh.receiveShadow = true;
-            mesh.castShadow = true;
+            // Sombras desativadas, não é mais necessário
+            // mesh.receiveShadow = true;
+            // mesh.castShadow = true;
             scene.add(mesh);
 
             // Armazenar a chave no mesh para facilitar o raycasting
@@ -230,7 +253,8 @@
 
             // 2. Cannon.js Body
             const shape = new CANNON.Box(new CANNON.Vec3(blockSize / 2, blockSize / 2, blockSize / 2));
-            const body = new CANNON.Body({ mass: 0, shape: shape }); // mass: 0 (estático)
+            // Atribuir o material de chão para controlar o atrito
+            const body = new CANNON.Body({ mass: 0, shape: shape, material: groundMaterial });
             body.position.set(x, y, z);
             world.addBody(body);
 
@@ -307,12 +331,15 @@
          * Cria o corpo físico do jogador (Player Body) e posiciona a câmera.
          */
         function createPlayer() {
-            // Criamos um cilindro ou cápsula para o jogador
-            const halfExtents = new CANNON.Vec3(0.5, 0.9, 0.5); // Largura x Altura x Profundidade
-            const playerShape = new CANNON.Box(halfExtents);
+            // A forma do jogador é uma esfera para evitar ficar preso nas bordas dos blocos
+            const playerShape = new CANNON.Sphere(0.6); // Raio da esfera
 
-            // Player Body: uma massa para que a gravidade afete
-            playerBody = new CANNON.Body({ mass: mass, shape: playerShape });
+            // Player Body: uma massa para que a gravidade afete e com o material customizado
+            playerBody = new CANNON.Body({
+                mass: mass,
+                shape: playerShape,
+                material: playerMaterial // Atribui o material de física
+            });
             playerBody.position.set(0, 10, 0); // Começa um pouco acima do chão
             playerBody.fixedRotation = true; // Não permite que o jogador tombe
             playerBody.updateMassProperties();
