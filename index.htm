@@ -1,0 +1,607 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CraftSim 3D</title>
+    <!-- Carregando Tailwind CSS para estilos base de UI -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.tailwindcss.com?plugins=forms,typography,aspect-ratio,line-clamp"></script>
+    <!-- Carregando three.js para gráficos 3D -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+    <!-- Carregando cannon.js para física -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
+    
+    <style>
+        /* Estilos customizados para o corpo e o canvas */
+        body {
+            margin: 0;
+            overflow: hidden;
+            font-family: 'Inter', sans-serif;
+            background-color: #1a1a1a;
+            color: #f0f0f0;
+        }
+        #info {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            padding: 8px 12px;
+            background: rgba(0, 0, 0, 0.7);
+            border-radius: 8px;
+            z-index: 100;
+            user-select: none;
+            line-height: 1.5;
+            font-size: 14px;
+        }
+        #blocker {
+            position: fixed;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(0,0,0,0.8);
+            display: flex;
+            flex-direction: column;
+            justify-content: center;
+            align-items: center;
+            z-index: 1;
+        }
+        #instructions {
+            width: 80%;
+            max-width: 400px;
+            padding: 24px;
+            background: #2d3748; /* bg-gray-700 */
+            border-radius: 12px;
+            text-align: center;
+            box-shadow: 0 10px 15px rgba(0, 0, 0, 0.2);
+        }
+        #crosshair {
+            position: fixed;
+            top: 50%;
+            left: 50%;
+            width: 10px;
+            height: 10px;
+            margin: -5px 0 0 -5px;
+            border-radius: 50%;
+            background-color: rgba(255, 255, 255, 0.8);
+            border: 2px solid black;
+            z-index: 2;
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Overlay de Instruções (Pointer Lock) -->
+    <div id="blocker">
+        <div id="instructions">
+            <h1 class="text-2xl font-bold mb-4 text-white">CraftSim 3D</h1>
+            <p class="mb-4">Clique para Iniciar e Travar o Mouse (Câmera em Primeira Pessoa)</p>
+            <div class="text-left text-sm p-4 bg-gray-600 rounded-md">
+                <p><strong class="text-yellow-300">Movimento:</strong> W, A, S, D</p>
+                <p><strong class="text-yellow-300">Pular:</strong> Espaço</p>
+                <p><strong class="text-yellow-300">Destruir Bloco:</strong> Clique do Mouse (Esquerdo)</p>
+                <p><strong class="text-yellow-300">Construir Bloco:</strong> Clique do Mouse (Direito)</p>
+            </div>
+        </div>
+    </div>
+
+    <!-- Crosshair para mira -->
+    <div id="crosshair" style="display: none;"></div>
+
+    <!-- Informações de Debug e Controles -->
+    <div id="info">
+        <p>FPS: <span id="fps-display">--</span></p>
+        <p>Blocos: <span id="block-count">0</span></p>
+        <p>Pos (Y): <span id="player-pos-y">0.00</span></p>
+    </div>
+
+    <script type="module">
+        // =================================================================
+        // CONFIGURAÇÃO GERAL
+        // =================================================================
+
+        // Three.js (Gráficos)
+        let scene, camera, renderer;
+        // Cannon.js (Física)
+        let world;
+        // Elementos de UI
+        const blocker = document.getElementById('blocker');
+        const instructions = document.getElementById('instructions');
+        const crosshair = document.getElementById('crosshair');
+        
+        // Controle da Câmera/Jogador
+        let controls, playerBody;
+        let isLocked = false;
+
+        // Movimento
+        let moveForward = false;
+        let moveBackward = false;
+        let moveLeft = false;
+        let moveRight = false;
+        let canJump = false;
+
+        // Velocidade e Passo de Tempo
+        const velocity = new CANNON.Vec3();
+        const mass = 50;
+        const playerSpeed = 10;
+        const jumpVelocity = 8;
+        let lastTime;
+        const timeStep = 1 / 60;
+
+        // Estrutura de Dados dos Blocos (para controle de lógica e remoção)
+        const blocks = {}; // Key: "x_y_z", Value: { mesh, body }
+        
+        // Material dos Blocos
+        const blockMaterials = {
+            grass: new THREE.MeshLambertMaterial({ color: 0x6aa84f }), // Verde (Topo)
+            dirt: new THREE.MeshLambertMaterial({ color: 0x996633 }),  // Marrom (Lados/Base)
+            stone: new THREE.MeshLambertMaterial({ color: 0x808080 }), // Cinza (Pedra)
+        };
+        const activeBlockMaterial = blockMaterials.grass;
+        const hitMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5, wireframe: true });
+        
+        const blockSize = 1;
+        
+        // Raycaster para interações (destruir/construir)
+        const raycaster = new THREE.Raycaster();
+        const mouse = new THREE.Vector2();
+
+
+        // =================================================================
+        // FUNÇÕES DE UTILIDADE E INICIALIZAÇÃO
+        // =================================================================
+        
+        /**
+         * Inicializa o mundo 3D (Three.js) e a física (Cannon.js).
+         */
+        function init() {
+            // --- Three.js Setup ---
+            scene = new THREE.Scene();
+            scene.background = new THREE.Color(0x87ceeb); // Céu azul
+            scene.fog = new THREE.Fog(0x87ceeb, 0, 50);
+
+            camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
+            
+            renderer = new THREE.WebGLRenderer({ antialias: true });
+            renderer.setSize(window.innerWidth, window.innerHeight);
+            renderer.shadowMap.enabled = true;
+            document.body.appendChild(renderer.domElement);
+
+            // --- Cannon.js Setup ---
+            world = new CANNON.World();
+            world.gravity.set(0, -20, 0); // Gravidade mais forte para simular queda rápida
+            world.broadphase = new CANNON.NaiveBroadphase();
+            world.solver.iterations = 10;
+            
+            // --- Iluminação ---
+            const ambientLight = new THREE.AmbientLight(0xcccccc, 0.6);
+            scene.add(ambientLight);
+
+            const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
+            directionalLight.position.set(10, 20, 10);
+            directionalLight.castShadow = true;
+            directionalLight.shadow.mapSize.width = 2048;
+            directionalLight.shadow.mapSize.height = 2048;
+            directionalLight.shadow.camera.near = 0.5;
+            directionalLight.shadow.camera.far = 50;
+            directionalLight.shadow.camera.left = -20;
+            directionalLight.shadow.camera.right = 20;
+            directionalLight.shadow.camera.top = 20;
+            directionalLight.shadow.camera.bottom = -20;
+            scene.add(directionalLight);
+            
+            // --- Criação do Mundo Inicial ---
+            createWorld();
+
+            // --- Criação do Jogador ---
+            createPlayer();
+            
+            // --- Eventos ---
+            setupPointerLock();
+            setupEventListeners();
+            
+            window.addEventListener('resize', onWindowResize);
+        }
+
+        /**
+         * Cria e adiciona um bloco (mesh e body) no mundo.
+         * @param {number} x Coordenada X
+         * @param {number} y Coordenada Y
+         * @param {number} z Coordenada Z
+         * @param {string} type Tipo de bloco (para material)
+         */
+        function addBlock(x, y, z, type = 'dirt') {
+            const key = `${x}_${y}_${z}`;
+            if (blocks[key]) return; // Evita duplicatas
+
+            // 1. Three.js Mesh
+            const geometry = new THREE.BoxGeometry(blockSize, blockSize, blockSize);
+            // Uso de um único material por enquanto para simplicidade
+            const material = blockMaterials[type] || blockMaterials.dirt;
+            const mesh = new THREE.Mesh(geometry, material);
+            mesh.position.set(x, y, z);
+            mesh.receiveShadow = true;
+            mesh.castShadow = true;
+            scene.add(mesh);
+
+            // Armazenar a chave no mesh para facilitar o raycasting
+            mesh.userData.key = key;
+
+            // 2. Cannon.js Body
+            const shape = new CANNON.Box(new CANNON.Vec3(blockSize / 2, blockSize / 2, blockSize / 2));
+            const body = new CANNON.Body({ mass: 0, shape: shape }); // mass: 0 (estático)
+            body.position.set(x, y, z);
+            world.addBody(body);
+
+            // 3. Armazenar na estrutura de dados
+            blocks[key] = { mesh, body };
+            document.getElementById('block-count').innerText = Object.keys(blocks).length;
+        }
+
+        /**
+         * Remove um bloco do mundo.
+         * @param {number} x Coordenada X
+         * @param {number} y Coordenada Y
+         * @param {number} z Coordenada Z
+         */
+        function removeBlock(x, y, z) {
+            const key = `${x}_${y}_${z}`;
+            const block = blocks[key];
+
+            if (block) {
+                // Remover do Three.js
+                scene.remove(block.mesh);
+                block.mesh.geometry.dispose();
+                // O material é compartilhado, não o descarte.
+                
+                // Remover do Cannon.js
+                world.removeBody(block.body);
+
+                // Remover da estrutura de dados
+                delete blocks[key];
+                document.getElementById('block-count').innerText = Object.keys(blocks).length;
+                return true;
+            }
+            return false;
+        }
+
+        /**
+         * Cria um mundo inicial simples com blocos e irregularidades.
+         */
+        function createWorld() {
+            const worldSize = 32;
+            const heightMap = {}; // Simulação de mapa de altura
+
+            for (let x = -worldSize / 2; x < worldSize / 2; x += blockSize) {
+                for (let z = -worldSize / 2; z < worldSize / 2; z += blockSize) {
+                    // Altura base aleatória para irregularidade
+                    let h = Math.floor(Math.random() * 3); 
+                    
+                    // Adicionar uma elevação/descida suave no centro
+                    const distSq = x * x + z * z;
+                    if (distSq < 100) {
+                        h += 3;
+                    } else if (distSq > 300) {
+                         h -= 1;
+                    }
+                    
+                    // Garantir altura mínima de 1
+                    h = Math.max(1, h);
+
+                    // Cria as camadas de blocos
+                    for (let y = 0; y <= h; y += blockSize) {
+                        let type = 'dirt';
+                        if (y === h) {
+                            type = 'grass';
+                        } else if (y < h - 2) {
+                            type = 'stone';
+                        }
+                        addBlock(x, y, z, type);
+                    }
+                }
+            }
+        }
+
+        /**
+         * Cria o corpo físico do jogador (Player Body) e posiciona a câmera.
+         */
+        function createPlayer() {
+            // Criamos um cilindro ou cápsula para o jogador
+            const halfExtents = new CANNON.Vec3(0.5, 0.9, 0.5); // Largura x Altura x Profundidade
+            const playerShape = new CANNON.Box(halfExtents);
+            
+            // Player Body: uma massa para que a gravidade afete
+            playerBody = new CANNON.Body({ mass: mass, shape: playerShape });
+            playerBody.position.set(0, 10, 0); // Começa um pouco acima do chão
+            playerBody.fixedRotation = true; // Não permite que o jogador tombe
+            playerBody.updateMassProperties();
+            world.addBody(playerBody);
+
+            // Adiciona um listener para colisões para verificar se pode pular
+            playerBody.addEventListener("collide", (e) => {
+                // Checa se a colisão ocorreu com algo abaixo do jogador
+                const contactNormal = new CANNON.Vec3();
+                const upAxis = new CANNON.Vec3(0, 1, 0);
+
+                if (e.contact) {
+                    // Contact point held inside the event argument
+                    const contact = e.contact;
+
+                    // Compute contact normal
+                    if (contact.bi.id === playerBody.id) {
+                        contact.ni.negate(contactNormal);
+                    } else {
+                        contactNormal.copy(contact.ni);
+                    }
+
+                    // Se a normal do contato aponta para cima, significa que estamos no chão.
+                    if (contactNormal.dot(upAxis) > 0.5) {
+                        canJump = true;
+                    }
+                }
+            });
+
+            // Ajusta a posição da câmera para ficar no topo do player body
+            // A altura do corpo é 1.8, então a câmera fica em 0.9 + 0.1 de offset
+            camera.position.set(0, 0.8, 0); 
+        }
+
+        /**
+         * Configura a API de Bloqueio de Ponteiro (Pointer Lock API) para controle de câmera.
+         */
+        function setupPointerLock() {
+            const element = document.body;
+
+            const pointerlockchange = () => {
+                if (document.pointerLockElement === element) {
+                    isLocked = true;
+                    blocker.style.display = 'none';
+                    crosshair.style.display = 'block';
+                } else {
+                    isLocked = false;
+                    blocker.style.display = 'flex';
+                    crosshair.style.display = 'none';
+                }
+            };
+
+            const pointerlockerror = () => {
+                console.error("Pointer Lock Error");
+            };
+
+            document.addEventListener('pointerlockchange', pointerlockchange);
+            document.addEventListener('pointerlockerror', pointerlockerror);
+
+            instructions.addEventListener('click', () => {
+                element.requestPointerLock();
+            });
+        }
+        
+        /**
+         * Lida com o movimento do mouse para girar a câmera.
+         * @param {MouseEvent} event 
+         */
+        function onMouseMove(event) {
+            if (!isLocked) return;
+
+            const movementX = event.movementX || event.mozMovementX || event.webkitMovementX || 0;
+            const movementY = event.movementY || event.mozMovementY || event.webkitMovementY || 0;
+
+            // Rotação horizontal (Yaw) - afeta o player body
+            const horizontalRotation = movementX * 0.002;
+            // Cria um quaternion de rotação em torno do eixo Y do mundo
+            const rotationQuat = new CANNON.Quaternion();
+            rotationQuat.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), -horizontalRotation);
+            
+            // Aplica a rotação ao quaternion do player body
+            playerBody.quaternion = rotationQuat.mult(playerBody.quaternion);
+            
+            // Rotação vertical (Pitch) - afeta apenas a câmera (limitar para evitar virar de cabeça para baixo)
+            const verticalRotation = movementY * 0.002;
+            camera.rotation.x -= verticalRotation;
+            camera.rotation.x = Math.max(-Math.PI / 2, Math.min(Math.PI / 2, camera.rotation.x));
+        }
+
+        /**
+         * Configura listeners de teclado e mouse.
+         */
+        function setupEventListeners() {
+            document.addEventListener('keydown', onKeyDown);
+            document.addEventListener('keyup', onKeyUp);
+            document.addEventListener('mousemove', onMouseMove);
+            document.addEventListener('click', onClick);
+        }
+
+        /**
+         * Lida com cliques do mouse para destruição (esquerda) ou construção (direita).
+         * @param {MouseEvent} event 
+         */
+        function onClick(event) {
+            if (!isLocked) return;
+
+            // 1. Raycasting
+            // O raycaster já aponta para o centro da tela se isLocked for true
+            raycaster.setFromCamera(mouse, camera);
+
+            // Filtra apenas os meshes de blocos
+            const blockMeshes = Object.values(blocks).map(b => b.mesh);
+            const intersects = raycaster.intersectObjects(blockMeshes);
+
+            if (intersects.length > 0) {
+                const intersect = intersects[0];
+                const mesh = intersect.object;
+                
+                // Posição central do bloco (arredondada para a grid)
+                const x = mesh.position.x;
+                const y = mesh.position.y;
+                const z = mesh.position.z;
+
+                if (event.button === 0) { // Clique Esquerdo (Destruir)
+                    removeBlock(x, y, z);
+                } else if (event.button === 2) { // Clique Direito (Construir)
+                    // Posição de construção: use a normal da face atingida
+                    // Adiciona o bloco na posição adjacente à face atingida
+                    const buildPos = intersect.point
+                        .clone()
+                        .add(intersect.face.normal.clone().multiplyScalar(blockSize / 2));
+
+                    // Arredonda para a grid (0.5 + 0.5 = 1.0)
+                    const newX = Math.round(buildPos.x / blockSize) * blockSize;
+                    const newY = Math.round(buildPos.y / blockSize) * blockSize;
+                    const newZ = Math.round(buildPos.z / blockSize) * blockSize;
+                    
+                    // Prevenção de construção dentro do próprio corpo (com buffer)
+                    const playerPos = playerBody.position;
+                    const isTooClose = Math.abs(newX - playerPos.x) < 1.5 && Math.abs(newY - playerPos.y) < 2.5 && Math.abs(newZ - playerPos.z) < 1.5;
+
+                    if (!isTooClose) {
+                        addBlock(newX, newY, newZ, 'dirt');
+                    }
+                }
+            }
+        }
+        
+        /**
+         * Lida com o pressionamento de teclas.
+         * @param {KeyboardEvent} event 
+         */
+        function onKeyDown(event) {
+            switch (event.code) {
+                case 'KeyW': moveForward = true; break;
+                case 'KeyA': moveLeft = true; break;
+                case 'KeyS': moveBackward = true; break;
+                case 'KeyD': moveRight = true; break;
+                case 'Space':
+                    if (canJump) {
+                        // Aplica a velocidade de salto no eixo Y do player body
+                        playerBody.velocity.y = jumpVelocity;
+                        canJump = false; // Não pode pular novamente no ar
+                    }
+                    break;
+            }
+        }
+
+        /**
+         * Lida com a liberação de teclas.
+         * @param {KeyboardEvent} event 
+         */
+        function onKeyUp(event) {
+            switch (event.code) {
+                case 'KeyW': moveForward = false; break;
+                case 'KeyA': moveLeft = false; break;
+                case 'KeyS': moveBackward = false; break;
+                case 'KeyD': moveRight = false; break;
+            }
+        }
+
+        /**
+         * Lida com o redimensionamento da janela.
+         */
+        function onWindowResize() {
+            camera.aspect = window.innerWidth / window.innerHeight;
+            camera.updateProjectionMatrix();
+            renderer.setSize(window.innerWidth, window.innerHeight);
+        }
+
+        // =================================================================
+        // LOOP PRINCIPAL DO JOGO (ANIMATE)
+        // =================================================================
+        
+        /**
+         * Loop de animação e física.
+         */
+        function animate(time) {
+            requestAnimationFrame(animate);
+
+            if (lastTime !== undefined) {
+                const dt = (time - lastTime) / 1000;
+                
+                // 1. Passo da Física (Cannon.js)
+                world.step(timeStep, dt);
+
+                // 2. Movimento do Jogador
+                if (isLocked) {
+                    updatePlayerMovement(dt);
+                }
+
+                // 3. Renderização (Three.js)
+                // Sincroniza a posição da câmera com o corpo físico do jogador
+                camera.position.copy(playerBody.position);
+                
+                // A rotação da câmera (pitch) é separada da rotação do corpo (yaw)
+                // O corpo gira no eixo Y do mundo. A câmera é um child do playerBody implicitamente
+                // O quaternion do playerBody controla a rotação horizontal
+                
+                // Aplica a rotação horizontal do corpo ao grupo de rotação da câmera (implícito aqui no Three.js)
+                // Como não usamos um grupo, aplicamos a rotação do corpo à posição da câmera
+                // Para simplificar, o playerBody só move a Câmera, e a rotação é feita pelo mouseMove
+
+                // 4. Atualização da UI
+                document.getElementById('fps-display').innerText = Math.round(1 / dt);
+                document.getElementById('player-pos-y').innerText = playerBody.position.y.toFixed(2);
+            }
+            
+            renderer.render(scene, camera);
+            lastTime = time;
+        }
+
+        /**
+         * Atualiza a velocidade do corpo do jogador com base na entrada do teclado.
+         * @param {number} dt Delta time
+         */
+        function updatePlayerMovement(dt) {
+            // Zera a velocidade X e Z para impedir que o jogador "deslize" indefinidamente
+            let factor = 0.5; // Fator de desaceleração (0.5 = 50% da velocidade)
+            playerBody.velocity.x *= factor;
+            playerBody.velocity.z *= factor;
+
+            // Pega o quaternion atual do playerBody
+            const quat = playerBody.quaternion;
+            
+            // Cria um vetor que representa a direção 'para frente' (baseado na rotação atual)
+            const frontVector = new CANNON.Vec3(0, 0, -1);
+            const sideVector = new CANNON.Vec3(-1, 0, 0);
+
+            // Rotaciona os vetores de movimento pela rotação do playerBody
+            const rotatedFront = quat.vmult(frontVector);
+            const rotatedSide = quat.vmult(sideVector);
+
+            let hasMovement = false;
+
+            if (moveForward) {
+                playerBody.velocity.x += rotatedFront.x * playerSpeed;
+                playerBody.velocity.z += rotatedFront.z * playerSpeed;
+                hasMovement = true;
+            }
+            if (moveBackward) {
+                playerBody.velocity.x -= rotatedFront.x * playerSpeed;
+                playerBody.velocity.z -= rotatedFront.z * playerSpeed;
+                hasMovement = true;
+            }
+            if (moveLeft) {
+                playerBody.velocity.x += rotatedSide.x * playerSpeed;
+                playerBody.velocity.z += rotatedSide.z * playerSpeed;
+                hasMovement = true;
+            }
+            if (moveRight) {
+                playerBody.velocity.x -= rotatedSide.x * playerSpeed;
+                playerBody.velocity.z -= rotatedSide.z * playerSpeed;
+                hasMovement = true;
+            }
+            
+            // Limita a velocidade horizontal (para evitar que a física exploda ou movimento excessivo)
+            const maxVelocity = 15;
+            const currentHorizontalSpeedSq = playerBody.velocity.x * playerBody.velocity.x + playerBody.velocity.z * playerBody.velocity.z;
+            if (currentHorizontalSpeedSq > maxVelocity * maxVelocity) {
+                const ratio = maxVelocity / Math.sqrt(currentHorizontalSpeedSq);
+                playerBody.velocity.x *= ratio;
+                playerBody.velocity.z *= ratio;
+            }
+        }
+
+        // --- Inicia o Jogo ---
+        window.onload = function() {
+            init();
+            animate();
+        };
+
+    </script>
+</body>
+</html>
