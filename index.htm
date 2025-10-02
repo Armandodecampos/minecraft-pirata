@@ -345,6 +345,9 @@
             playerBody.updateMassProperties();
             world.addBody(playerBody);
 
+            // Corrige o problema de "visão diagonal" definindo a ordem de rotação
+            camera.rotation.order = 'YXZ';
+
             // Adiciona um listener para colisões para verificar se pode pular
             playerBody.addEventListener("collide", (e) => {
                 // Checa se a colisão ocorreu com algo abaixo do jogador
