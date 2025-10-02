@@ -11,7 +11,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
     <!-- Carregando cannon.js para física -->
     <script src="https://cdnjs.cloudflare.com/ajax/libs/cannon.js/0.6.2/cannon.min.js"></script>
-    
+
     <style>
         /* Estilos customizados para o corpo e o canvas */
         body {
@@ -106,7 +106,7 @@
         const blocker = document.getElementById('blocker');
         const instructions = document.getElementById('instructions');
         const crosshair = document.getElementById('crosshair');
-        
+
         // Controle da Câmera/Jogador
         let controls, playerBody;
         let isLocked = false;
@@ -128,7 +128,7 @@
 
         // Estrutura de Dados dos Blocos (para controle de lógica e remoção)
         const blocks = {}; // Key: "x_y_z", Value: { mesh, body }
-        
+
         // Material dos Blocos
         const blockMaterials = {
             grass: new THREE.MeshLambertMaterial({ color: 0x6aa84f }), // Verde (Topo)
@@ -137,9 +137,9 @@
         };
         const activeBlockMaterial = blockMaterials.grass;
         const hitMaterial = new THREE.MeshBasicMaterial({ color: 0xff0000, transparent: true, opacity: 0.5, wireframe: true });
-        
+
         const blockSize = 1;
-        
+
         // Raycaster para interações (destruir/construir)
         const raycaster = new THREE.Raycaster();
         const mouse = new THREE.Vector2();
@@ -148,7 +148,7 @@
         // =================================================================
         // FUNÇÕES DE UTILIDADE E INICIALIZAÇÃO
         // =================================================================
-        
+
         /**
          * Inicializa o mundo 3D (Three.js) e a física (Cannon.js).
          */
@@ -159,8 +159,9 @@
             scene.fog = new THREE.Fog(0x87ceeb, 0, 50);
 
             camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 1000);
-            
-            renderer = new THREE.WebGLRenderer({ antialias: true });
+
+            // Otimização: Desativar antialias para ganho de performance
+            renderer = new THREE.WebGLRenderer({ antialias: false });
             renderer.setSize(window.innerWidth, window.innerHeight);
             renderer.shadowMap.enabled = true;
             document.body.appendChild(renderer.domElement);
@@ -168,9 +169,10 @@
             // --- Cannon.js Setup ---
             world = new CANNON.World();
             world.gravity.set(0, -20, 0); // Gravidade mais forte para simular queda rápida
-            world.broadphase = new CANNON.NaiveBroadphase();
+            // Otimização: SAPBroadphase é mais eficiente para mundos estáticos
+            world.broadphase = new CANNON.SAPBroadphase(world);
             world.solver.iterations = 10;
-            
+
             // --- Iluminação ---
             const ambientLight = new THREE.AmbientLight(0xcccccc, 0.6);
             scene.add(ambientLight);
@@ -178,8 +180,9 @@
             const directionalLight = new THREE.DirectionalLight(0xffffff, 0.8);
             directionalLight.position.set(10, 20, 10);
             directionalLight.castShadow = true;
-            directionalLight.shadow.mapSize.width = 2048;
-            directionalLight.shadow.mapSize.height = 2048;
+            // Otimização: Reduzir a resolução do mapa de sombras
+            directionalLight.shadow.mapSize.width = 1024;
+            directionalLight.shadow.mapSize.height = 1024;
             directionalLight.shadow.camera.near = 0.5;
             directionalLight.shadow.camera.far = 50;
             directionalLight.shadow.camera.left = -20;
@@ -187,17 +190,17 @@
             directionalLight.shadow.camera.top = 20;
             directionalLight.shadow.camera.bottom = -20;
             scene.add(directionalLight);
-            
+
             // --- Criação do Mundo Inicial ---
             createWorld();
 
             // --- Criação do Jogador ---
             createPlayer();
-            
+
             // --- Eventos ---
             setupPointerLock();
             setupEventListeners();
-            
+
             window.addEventListener('resize', onWindowResize);
         }
 
@@ -251,7 +254,7 @@
                 scene.remove(block.mesh);
                 block.mesh.geometry.dispose();
                 // O material é compartilhado, não o descarte.
-                
+
                 // Remover do Cannon.js
                 world.removeBody(block.body);
 
@@ -273,8 +276,8 @@
             for (let x = -worldSize / 2; x < worldSize / 2; x += blockSize) {
                 for (let z = -worldSize / 2; z < worldSize / 2; z += blockSize) {
                     // Altura base aleatória para irregularidade
-                    let h = Math.floor(Math.random() * 3); 
-                    
+                    let h = Math.floor(Math.random() * 3);
+
                     // Adicionar uma elevação/descida suave no centro
                     const distSq = x * x + z * z;
                     if (distSq < 100) {
@@ -282,7 +285,7 @@
                     } else if (distSq > 300) {
                          h -= 1;
                     }
-                    
+
                     // Garantir altura mínima de 1
                     h = Math.max(1, h);
 
@@ -307,7 +310,7 @@
             // Criamos um cilindro ou cápsula para o jogador
             const halfExtents = new CANNON.Vec3(0.5, 0.9, 0.5); // Largura x Altura x Profundidade
             const playerShape = new CANNON.Box(halfExtents);
-            
+
             // Player Body: uma massa para que a gravidade afete
             playerBody = new CANNON.Body({ mass: mass, shape: playerShape });
             playerBody.position.set(0, 10, 0); // Começa um pouco acima do chão
@@ -341,7 +344,7 @@
 
             // Ajusta a posição da câmera para ficar no topo do player body
             // A altura do corpo é 1.8, então a câmera fica em 0.9 + 0.1 de offset
-            camera.position.set(0, 0.8, 0); 
+            camera.position.set(0, 0.8, 0);
         }
 
         /**
@@ -373,10 +376,10 @@
                 element.requestPointerLock();
             });
         }
-        
+
         /**
          * Lida com o movimento do mouse para girar a câmera.
-         * @param {MouseEvent} event 
+         * @param {MouseEvent} event
          */
         function onMouseMove(event) {
             if (!isLocked) return;
@@ -389,10 +392,10 @@
             // Cria um quaternion de rotação em torno do eixo Y do mundo
             const rotationQuat = new CANNON.Quaternion();
             rotationQuat.setFromAxisAngle(new CANNON.Vec3(0, 1, 0), -horizontalRotation);
-            
+
             // Aplica a rotação ao quaternion do player body
             playerBody.quaternion = rotationQuat.mult(playerBody.quaternion);
-            
+
             // Rotação vertical (Pitch) - afeta apenas a câmera (limitar para evitar virar de cabeça para baixo)
             const verticalRotation = movementY * 0.002;
             camera.rotation.x -= verticalRotation;
@@ -411,7 +414,7 @@
 
         /**
          * Lida com cliques do mouse para destruição (esquerda) ou construção (direita).
-         * @param {MouseEvent} event 
+         * @param {MouseEvent} event
          */
         function onClick(event) {
             if (!isLocked) return;
@@ -427,7 +430,7 @@
             if (intersects.length > 0) {
                 const intersect = intersects[0];
                 const mesh = intersect.object;
-                
+
                 // Posição central do bloco (arredondada para a grid)
                 const x = mesh.position.x;
                 const y = mesh.position.y;
@@ -446,7 +449,7 @@
                     const newX = Math.round(buildPos.x / blockSize) * blockSize;
                     const newY = Math.round(buildPos.y / blockSize) * blockSize;
                     const newZ = Math.round(buildPos.z / blockSize) * blockSize;
-                    
+
                     // Prevenção de construção dentro do próprio corpo (com buffer)
                     const playerPos = playerBody.position;
                     const isTooClose = Math.abs(newX - playerPos.x) < 1.5 && Math.abs(newY - playerPos.y) < 2.5 && Math.abs(newZ - playerPos.z) < 1.5;
@@ -457,10 +460,10 @@
                 }
             }
         }
-        
+
         /**
          * Lida com o pressionamento de teclas.
-         * @param {KeyboardEvent} event 
+         * @param {KeyboardEvent} event
          */
         function onKeyDown(event) {
             switch (event.code) {
@@ -480,7 +483,7 @@
 
         /**
          * Lida com a liberação de teclas.
-         * @param {KeyboardEvent} event 
+         * @param {KeyboardEvent} event
          */
         function onKeyUp(event) {
             switch (event.code) {
@@ -503,7 +506,7 @@
         // =================================================================
         // LOOP PRINCIPAL DO JOGO (ANIMATE)
         // =================================================================
-        
+
         /**
          * Loop de animação e física.
          */
@@ -512,7 +515,7 @@
 
             if (lastTime !== undefined) {
                 const dt = (time - lastTime) / 1000;
-                
+
                 // 1. Passo da Física (Cannon.js)
                 world.step(timeStep, dt);
 
@@ -524,20 +527,28 @@
                 // 3. Renderização (Three.js)
                 // Sincroniza a posição da câmera com o corpo físico do jogador
                 camera.position.copy(playerBody.position);
-                
-                // A rotação da câmera (pitch) é separada da rotação do corpo (yaw)
-                // O corpo gira no eixo Y do mundo. A câmera é um child do playerBody implicitamente
-                // O quaternion do playerBody controla a rotação horizontal
-                
-                // Aplica a rotação horizontal do corpo ao grupo de rotação da câmera (implícito aqui no Three.js)
-                // Como não usamos um grupo, aplicamos a rotação do corpo à posição da câmera
-                // Para simplificar, o playerBody só move a Câmera, e a rotação é feita pelo mouseMove
+
+                // Convertendo o quaternion do corpo de física para um Euler do three.js
+                // para extrair a rotação Y (yaw)
+                const euler = new THREE.Euler();
+                // É preciso criar um novo THREE.Quaternion, pois Cannon.js e Three.js têm objetos diferentes
+                const threeQuaternion = new THREE.Quaternion(
+                    playerBody.quaternion.x,
+                    playerBody.quaternion.y,
+                    playerBody.quaternion.z,
+                    playerBody.quaternion.w
+                );
+                euler.setFromQuaternion(threeQuaternion, 'YXZ'); // Ordem YXZ é comum para FPS
+
+                // A rotação vertical (pitch) já é controlada diretamente na câmera (onMouseMove)
+                // A rotação horizontal (yaw) vem do corpo físico
+                camera.rotation.y = euler.y;
 
                 // 4. Atualização da UI
                 document.getElementById('fps-display').innerText = Math.round(1 / dt);
                 document.getElementById('player-pos-y').innerText = playerBody.position.y.toFixed(2);
             }
-            
+
             renderer.render(scene, camera);
             lastTime = time;
         }
@@ -554,7 +565,7 @@
 
             // Pega o quaternion atual do playerBody
             const quat = playerBody.quaternion;
-            
+
             // Cria um vetor que representa a direção 'para frente' (baseado na rotação atual)
             const frontVector = new CANNON.Vec3(0, 0, -1);
             const sideVector = new CANNON.Vec3(-1, 0, 0);
@@ -585,7 +596,7 @@
                 playerBody.velocity.z -= rotatedSide.z * playerSpeed;
                 hasMovement = true;
             }
-            
+
             // Limita a velocidade horizontal (para evitar que a física exploda ou movimento excessivo)
             const maxVelocity = 15;
             const currentHorizontalSpeedSq = playerBody.velocity.x * playerBody.velocity.x + playerBody.velocity.z * playerBody.velocity.z;
